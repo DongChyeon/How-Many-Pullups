@@ -1,0 +1,19 @@
+# Planning / interview artifacts (sensitive, not tracked)
+.omc/
+
+# Secrets
+.env
+.env.*
+*.keystore
+*.jks
+local.properties
+google-services.json
+GoogleService-Info.plist
+
+# OS / IDE
+.DS_Store
+.idea/
+*.iml
+
+# Sensitive docs (backend ops, dataset, device lists)
+docs/private/
