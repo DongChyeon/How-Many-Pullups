@@ -195,16 +195,21 @@ create view public_leaderboard as
   order by e.reps desc, e.created_at asc;
 
 -- 유일한 제출 경로. verification_status는 인자에 없다.
+-- p_capture_mode('FRONT_MEASURE' | 'BACK_POSTURE')와 p_mode('STRICT' | 'PRACTICE')는
+-- 2026-09-30 카메라 뷰 모드 결정(PRD D1 F1.0)에 따른 필수 인자다.
+-- 서버는 FRONT_MEASURE + STRICT 조합 외에는 모두 거부한다(REQUIRES_FRONT_STRICT).
 create function submit_leaderboard_entry(
   p_reps int, p_session_started_at timestamptz, p_session_duration_ms int,
   p_timeline jsonb, p_app_version text, p_pose_engine text,
-  p_integrity_token text, p_video_sha256 text default null
+  p_integrity_token text, p_capture_mode text, p_mode text,
+  p_video_sha256 text default null
 ) returns jsonb
 language plpgsql security definer set search_path = public as $$
 begin
-  -- 1) auth.uid() 확인 2) 레이트 리밋 3) 입력 형식 4) 물리 일관성 검사
-  -- 5) PB 여부 6) INSERT(verification_status는 컬럼 기본값 'UNVERIFIED')
-  -- 7) 이상 FLAG 판정 8) 이전 타임라인 교체 9) {status, reason_code} 반환
+  -- 1) auth.uid() 확인 2) p_capture_mode = 'FRONT_MEASURE' AND p_mode = 'STRICT' 확인
+  -- 3) 레이트 리밋 4) 입력 형식 5) 물리 일관성 검사
+  -- 6) PB 여부 7) INSERT(verification_status는 컬럼 기본값 'UNVERIFIED')
+  -- 8) 이상 FLAG 판정 9) 이전 타임라인 교체 10) {status, reason_code} 반환
   ...
 end $$;
 revoke all on function submit_leaderboard_entry from public, anon;
@@ -216,17 +221,20 @@ grant execute on function submit_leaderboard_entry to authenticated;
 | 순서 | 검사 | 실패 시 |
 |------|------|---------|
 | 1 | 로그인 사용자(`auth.uid()` 존재) | `AUTH_REQUIRED` |
-| 2 | 레이트 리밋(M4.1) | `RATE_LIMITED` |
-| 3 | 형식: reps ≥ 1, 타임라인 JSON ≤ 16 KB(§M4.6a), 필수 키 존재, `videoSha256`는 null 또는 `^[0-9a-f]{64}$`, Integrity 토큰 존재 | `INVALID_PAYLOAD`, `INTEGRITY_TOKEN_MISSING` |
-| 4 | 물리 일관성(M4.3·M4.4) | `REP_TOO_FAST`, `DURATION_INCONSISTENT`, `TIMESTAMP_NON_MONOTONIC`, `REP_COUNT_MISMATCH`, `OUT_OF_PHYSICAL_RANGE` |
-| 5 | 본인 현재 PB보다 큰지 | `NOT_PERSONAL_BEST` |
-| 6 | 저장 + FLAG 판정(M4.5) + Integrity 검증 예약(M4.2) | — (`{status: "ACCEPTED", flagged: bool}` 반환) |
+| 2 | **`p_capture_mode = 'FRONT_MEASURE'` AND `p_mode = 'STRICT'`인지** — 그 밖의 모든 조합(`BACK_POSTURE`, `PRACTICE`, 알 수 없는 값 등)은 이 단계에서 거부한다 | `REQUIRES_FRONT_STRICT` |
+| 3 | 레이트 리밋(M4.1) | `RATE_LIMITED` |
+| 4 | 형식: reps ≥ 1, 타임라인 JSON ≤ 16 KB(§M4.6a), 필수 키 존재, `videoSha256`는 null 또는 `^[0-9a-f]{64}$`, Integrity 토큰 존재 | `INVALID_PAYLOAD`, `INTEGRITY_TOKEN_MISSING` |
+| 5 | 물리 일관성(M4.3·M4.4) | `REP_TOO_FAST`, `DURATION_INCONSISTENT`, `TIMESTAMP_NON_MONOTONIC`, `REP_COUNT_MISMATCH`, `OUT_OF_PHYSICAL_RANGE` |
+| 6 | 본인 현재 PB보다 큰지 | `NOT_PERSONAL_BEST` |
+| 7 | 저장 + FLAG 판정(M4.5) + Integrity 검증 예약(M4.2) | — (`{status: "ACCEPTED", flagged: bool}` 반환) |
+
+클라이언트는 자세 분석 모드(후면, `BACK_POSTURE`) 세션과 측정 모드(정면)의 연습(`PRACTICE`) 세션에서는 애초에 `submit_leaderboard_entry`를 호출하지 않는다(로컬 저장만). 위 2번 검사는 클라이언트 우회·변조 제출에 대한 서버 측 마지막 방어선이다.
 
 ## M4. 부정 방지 (MVP)
 
 ### M4.1 레이트 리밋 — 엄격 모드 리더보드 제출에만
 
-- 대상: `submit_leaderboard_entry` 호출 = **엄격 모드 리더보드 제출**뿐이다.
+- 대상: `submit_leaderboard_entry` 호출 = **엄격 모드 리더보드 제출**뿐이다. 2026-09-30 결정으로 `submit_leaderboard_entry`는 `captureMode = FRONT_MEASURE`, `mode = STRICT` 조합만 통과시키므로(M3.4 2번 검사), 레이트 리밋은 사실상 "측정 모드(정면) + 엄격 제출"에만 걸린다. `captureMode`·`mode` 두 필드는 페이로드에 수 바이트만 추가하며, 별도 저장 행이나 인덱스가 늘지 않으므로 **M2 비용 추정(DB·Egress)에 영향이 없다.**
 - 기본값: **사용자당 3건/일**(UTC 자정 리셋, 초기값). 형식 검사를 통과해 처리된 시도는 거부되더라도 1건으로 센다(검사 임계값을 반복 탐색하지 못하게). `AUTH_REQUIRED`·`RATE_LIMITED` 자체는 세지 않는다.
 - 구현: 그날 해당 사용자의 제출 시도 수를 `leaderboard_entries`와 거부 기록(카운트용 경량 행)에서 센다.
 - **연습 모드와 엄격 모드가 아닌 모든 세션에는 횟수 제한이 없다.** 연습 세션은 기기 로컬 DB에만 저장되고 서버를 호출하지 않으므로, 저장·재측정 횟수는 무제한이다(2026-09-27 사용자 결정). 엄격 모드 세션 자체(로컬 녹화·카운트·리포트)도 무제한이며, 제한은 서버 제출에만 걸린다.
@@ -402,6 +410,8 @@ create view ops_monthly_reports as
 | N16 | `NO_END` rep의 `durationMs`/`dE`가 비정상 값(예: 세션 길이보다 긴 값)이어도 나머지 rep은 모두 정상 | `OUT_OF_PHYSICAL_RANGE`·`TIMESTAMP_NON_MONOTONIC` 모두 이 rep에는 적용되지 않아 거부되지 않음, 정상 노출 |
 | N17 | 타임라인 JSON 크기 16 KB 이하(예: `compact` 형식 900 rep 상당) | 거부되지 않음(rep 수만으로 거부하지 않는다는 원칙 확인) |
 | N18 | 타임라인 JSON 크기 > 16 KB | `INVALID_PAYLOAD`로 거부 |
+| N19 | `captureMode = BACK_POSTURE`(자세 분석 모드/후면), `mode`는 무엇이든 제출 | `REQUIRES_FRONT_STRICT`로 거부, 행 없음 |
+| N20 | `captureMode = FRONT_MEASURE`(측정 모드/정면), `mode = PRACTICE`(연습) 제출 | `REQUIRES_FRONT_STRICT`로 거부, 행 없음 |
 
 ## M10. 백엔드 선택 근거
 

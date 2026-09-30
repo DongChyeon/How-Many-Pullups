@@ -17,3 +17,8 @@ GoogleService-Info.plist
 
 # Sensitive docs (backend ops, dataset, device lists)
 docs/private/
+
+# Raw videos (portrait rights, large files)
+videos/
+*.mp4
+*.mov
