@@ -207,6 +207,7 @@ sequenceDiagram
 | P5 | **StateFlow 출력** | 공통 파이프라인의 UI 출력은 `StateFlow`(현재 카운트, 상태, 품질 경고, fps)로만 한다. UI는 조회만 하고 상태를 바꾸지 않는다. 카운트 이벤트처럼 한 번만 소비해야 하는 신호는 별도 이벤트 스트림으로 보낸다. |
 | P6 | **음성 트리거 위치** | 카운트 이벤트 발생 즉시 파이프라인 스레드에서 `SpeechOutput`을 호출한다(UI 스레드 경유 금지). 지연 예산은 D2. |
 | P7 | **좌표 정규화 경계** | 회전·미러링 보정은 어댑터(네이티브)에서 끝내고, 공통 모듈은 "세로 기준, 미러링 없음" 좌표만 받는다. 어깨폭 S 기준 정규화는 공통(D2). |
+| P8 | **카메라 목표 프레임률 30 고정** | `CameraSource` 캡처 설정에서 목표 프레임률을 30으로 고정한다(예: CameraX `setTargetFrameRate(30, 30)`에 해당하는 설정). 1차 M0(8.2)에서 VideoCapture 없이 Preview + ImageAnalysis만 바인딩하자 실내 조명에서 AE가 카메라를 15 fps로 내렸고, 목표 30 지정 시 p50 28 / p5 24로 회복했다. VideoCapture를 바인딩한 경우에도 같은 설정을 명시한다. |
 
 ---
 
@@ -219,7 +220,7 @@ sequenceDiagram
 | `FrameSource` | 분석용 프레임 공급(실시간 또는 재생) | 시작/정지 → 프레임 스트림(이미지 + 단조 타임스탬프) | `CameraSource`: CameraX `ImageAnalysis`(YUV_420_888 또는 RGBA_8888 출력) / `VideoReplaySource`: Media3·MediaCodec | `CameraSource`: `AVCaptureVideoDataOutput` / `VideoReplaySource`: `AVAssetReader` | 중 | Kotlin/Native에서 `CMSampleBuffer`·`CVPixelBuffer` 다루기, 회전 처리 |
 | `PoseEstimator` | 프레임 → 33 랜드마크 + visibility | 프레임 + 타임스탬프 → `PoseFrame` 또는 "인물 없음" | MediaPipe Tasks Vision `PoseLandmarker`(LIVE_STREAM / VIDEO 모드) | MediaPipeTasksVision(CocoaPods) | 상 | CocoaPods ↔ Kotlin/Native cinterop 또는 Swift 브리지 필요, 공식 KMP 래퍼 없음(K7, UNVERIFIED) |
 | `CameraController` | 카메라 수명주기, 전/후면 선택, 프리뷰 뷰 제공, 하드웨어 레벨·해상도 보고 | 설정 → 프리뷰 뷰 + 카메라 정보 | CameraX `ProcessCameraProvider`, `PreviewView`를 `AndroidView`로 임베드 | `AVCaptureSession` + `AVCaptureVideoPreviewLayer`를 `UIKitView`로 임베드(K3 VERIFIED) | 중 | 세션 구성 코드를 Kotlin/Native에서 작성, `ExperimentalForeignApi` |
-| `VideoRecorder` | 엄격 세션 녹화(720p/30fps/목표 1.0 Mbps), 종료 후 파일 경로·SHA-256 계산 트리거 | 시작/정지 → 파일 URI | CameraX `VideoCapture` + `Recorder`(`setTargetVideoEncodingBitRate`, 7장) | `AVCaptureMovieFileOutput` 또는 `AVAssetWriter` | 상 | 분석 출력과 녹화 동시 구동(9장). iOS 16 미만 링크 시 동시 활성 불가, `AVAssetWriter`로 가면 Swift 부담 증가 |
+| `VideoRecorder` | 엄격 세션 녹화(720p/30fps/목표 0.85 Mbps, 7장), 종료 후 파일 경로·SHA-256 계산 트리거 | 시작/정지 → 파일 URI | CameraX `VideoCapture` + `Recorder`(`setTargetVideoEncodingBitRate`, 7장) | `AVCaptureMovieFileOutput` 또는 `AVAssetWriter` | 상 | 분석 출력과 녹화 동시 구동(9장). iOS 16 미만 링크 시 동시 활성 불가, `AVAssetWriter`로 가면 Swift 부담 증가 |
 | `SpeechOutput` | 카운트 음성(사전 합성 클립 1–100, "노카운트"), 100 초과는 TTS | 숫자·이벤트 → 소리, `play()` 호출 타임스탬프 기록 | `SoundPool`(사전 로드) + `TextToSpeech`(prewarm), 필요 시 Oboe/AAudio(6장) | `AVAudioPlayer`(`prepareToPlay`) + `AVSpeechSynthesizer` | 하 | 표준 API. 오디오 세션 카테고리 설정만 주의 |
 | `AuthProvider` | 소셜 로그인 → Supabase 세션 | 로그인 요청 → ID 토큰 → supabase-kt 세션 | Credential Manager(Google ID 토큰) → supabase-kt `signInWith(IDToken)` | Sign in with Apple(AuthenticationServices), Google Sign-In | 중 | Apple 로그인 필수 여부 등 App Store 정책(UNVERIFIED), 웹뷰 리디렉션 설정 |
 | `ShareSheet` | 기록 공유 카드(이미지 + "미검증" 표기) 공유 | 이미지·텍스트 → 시스템 공유 | `Intent.ACTION_SEND` + `FileProvider` | `UIActivityViewController` | 하 | 표준 API |
@@ -252,6 +253,8 @@ sequenceDiagram
 | 근거 수치(fps p50/p5, ±1 비율) | (미정) |
 | 결정일 | (미정) |
 
+1차 M0(2026-09-30, 8.2) 잠정: MediaPipe lite 유지, GPU 위임 우선. 실카메라 측정에 사람이 없어 lite·full 비교가 안 됐으므로 이 표는 재측정 후 채운다.
+
 ---
 
 ## 6. 오디오 지연 경로
@@ -271,9 +274,10 @@ D2 지연 예산: 내부 구간(TOP 최초 충족 프레임 → `play()` 호출)
 
 ## 7. 녹화 프리셋과 비트레이트
 
-- 엄격 세션 녹화는 MVP부터 **증빙 호환 프리셋: 720p / 30fps / 목표 1.0 Mbps**로 저장한다(D5 2.2B: 과거 PB를 Phase 2에서 재인코딩 없이 원본 그대로 제출, 16 MB 상한 ≈ 128초).
+- 엄격 세션 녹화는 MVP부터 **증빙 호환 프리셋: 720p / 30fps / 목표 0.85 Mbps**로 저장한다(D5 2.2B: 과거 PB를 Phase 2에서 재인코딩 없이 원본 그대로 제출, 16 MB 상한). 목표 0.85 Mbps에 실측 오버슈트 최대 14%를 적용하면 약 0.97 Mbps이고, **128초 ≤ 약 15.5 MB**다(80초 ≈ 9.7 MB). 16 MB 상한과 G1 계산(D5)은 바꾸지 않는다.
+- **2026-09-30 변경(1차 M0 결과).** 초안 목표는 1.0 Mbps였다. Flip7 실측(60초 × 4회)에서 영상 스트림이 1.01–1.14 Mbps(목표 대비 +1–14%), 컨테이너 전체가 1.06–1.19 Mbps(+6–19%)로 나와 128초 환산 16.9–19.0 MB가 16 MB 상한을 넘었다. 그래서 목표를 0.85 Mbps로 낮췄다.
 - **CameraX `Recorder` 목표 비트레이트: VERIFIED.** `Recorder.Builder.setTargetVideoEncodingBitRate(bitrate: Int)`가 CameraX **1.3.0부터** 있다. 문서 설명: 실제 비트레이트를 요청값 근처로 유지하려 하지만 장면에 따라 달라질 수 있고, 플랫폼 능력에 맞춰 내부적으로 바뀔 수 있으며, 오디오 비트레이트에는 영향이 없다. 출처: https://developer.android.com/reference/kotlin/androidx/camera/video/Recorder.Builder (접근 2026-09-27).
-- 남은 확인(M0): API는 있지만 "근사치"이므로 **Flip7에서 60초·120초 녹화의 실제 파일 크기와 평균 비트레이트**를 측정한다. 128초 녹화가 16 MB를 넘으면 목표값을 0.9 Mbps로 낮추고 다시 잰다.
+- 남은 확인(M0): API는 있지만 "근사치"이므로 **Flip7에서 60초·120초 녹화의 실제 파일 크기와 평균 비트레이트**를 측정한다. 1차 M0에서 목표 1.0 Mbps 설정 호출은 기기에서 동작했지만(VERIFIED) 실제 값이 목표를 넘었다(위 변경). **목표 0.85 Mbps로 기기에서 다시 잰다.** 판정은 영상 스트림 비트레이트가 아니라 **컨테이너 파일 크기**로 한다(1차 측정에서 컨테이너가 스트림보다 약 0.05 Mbps 컸다). 128초 환산 파일이 16 MB를 넘으면 목표를 0.8 Mbps로 낮추고 다시 잰다.
 - 폴백(실측이 상한을 지키지 못할 때만): 세션 종료 직후 WorkManager로 Media3 Transformer 1회 재인코딩, **그 결과 파일**을 보관·해시(D5 2.2B 폴백과 같음). 이 경우 재인코딩 시간·배터리 측정을 MVP M0로 되돌린다.
 - 포즈 분석(ImageAnalysis)은 녹화 비트레이트와 무관하다.
 
@@ -296,29 +300,81 @@ D2 지연 예산: 내부 구간(TOP 최초 충족 프레임 → `play()` 호출)
 
 | # | 항목 | 조건 | 지표 | 결과 | 합격 기준 |
 |---|------|------|------|------|-----------|
-| A1 | 추론 fps — MediaPipe lite | VIDEO 모드, CPU | p50 / p5 fps, 추론 ms/프레임 p50/p95 | | 참고(상한치) |
-| A2 | 추론 fps — MediaPipe full | 동상 | 동상 | | 참고 |
-| A3 | 추론 fps — ML Kit base | 동상 | 동상 | | 참고 |
-| A4 | GPU 델리게이트 fps(MediaPipe lite/full) | 참고용, 정확도 검증에는 미사용 | p50 fps | | 참고 |
-| A5 | 디코드 프레임 → 엔진 입력 변환 비용 | 비트맵/RGBA 변환 | ms/프레임 p50/p95 | | 기록 |
-| A6 | 결정성 | 같은 영상 3회 반복 | 카운트·타임라인 일치 여부 | | 3회 완전 일치 |
+| A1 | 추론 fps — MediaPipe lite | VIDEO 모드, CPU | p50 / p5 fps, 추론 ms/프레임 p50/p95 | 1차: 37.4–44.6 / 42.6–50.4 ms, 22–27 fps(아래 표) | 참고(상한치) |
+| A2 | 추론 fps — MediaPipe full | 동상 | 동상 | 1차: 54.1–59.8 / 68.2–109.2 ms, 17–19 fps | 참고 |
+| A3 | 추론 fps — ML Kit base | 동상 | 동상 | 1차 미측정 | 참고 |
+| A4 | GPU 델리게이트 fps(MediaPipe lite/full) | 참고용, 정확도 검증에는 미사용 | p50 fps | 1차: lite 31–43, full 27–35 fps(CPU 대비 1.4–2.1배) | 참고 |
+| A5 | 디코드 프레임 → 엔진 입력 변환 비용 | 비트맵/RGBA 변환 | ms/프레임 p50/p95 | 1차: 디코드 20–26 / 24–33 ms, MPImage 감싸기 < 0.05 ms | 기록 |
+| A6 | 결정성 | 같은 영상 3회 반복 | 카운트·타임라인 일치 여부 | 1차: 후면 lite CPU 3회 일치(크루드 카운터 기준) | 3회 완전 일치 |
 
 **B. 실카메라 측정(Flip7)** — 조건마다 60초 연속 3회.
 
 | # | 항목 | 조건 | 지표 | 결과 | 합격 기준 |
 |---|------|------|------|------|-----------|
-| B1 | 카메라 하드웨어 레벨 | 후면 | LEGACY/LIMITED/FULL/LEVEL_3 | FULL(adb 사전 확인, 앱에서 재기록) | 기록 |
-| B2 | stream sharing 적용 여부 | 3 use case 바인딩 | 적용/미적용 | | 기록 |
-| B3 | 3 use case 동시 분석 fps — 녹화 off | Preview + ImageAnalysis, 엔진별 | p50 / p5 fps | | p50 ≥ 20, p5 ≥ 15 |
-| B4 | 3 use case 동시 분석 fps — **녹화 on** | Preview + ImageAnalysis + VideoCapture(720p/30/1.0 Mbps), 엔진별 | p50 / p5 fps | | **p50 ≥ 20, p5 ≥ 15** |
-| B5 | YUV → RGB/비트맵 변환 비용 | ImageAnalysis 출력 형식별(YUV_420_888, RGBA_8888) | ms/프레임 p50/p95 | | 기록(예산: 센서→분석기 ≤ 50 ms 안) |
-| B6 | 분석 입력 드롭률 | KEEP_ONLY_LATEST | 드롭 프레임 / 전체 | | 기록 |
-| B7 | 오디오 출력 지연 | `SoundPool.play()` → 소리(240fps 슬로모션 또는 루프백) | p50 / p95 ms | | **p95 ≤ 100 ms**, 초과 시 6장 저지연 교체 |
-| B8 | 녹화 실제 비트레이트·크기 | 60초 / 120초 | MB, 평균 Mbps | | 128초 환산 ≤ 16 MB |
-| B9 | 카메라 오버헤드 비율 | B4 fps ÷ A1(또는 채택 엔진) fps | 비율 | | 기록(부록 A 전략 2) |
-| B10 | 발열·스로틀링 | 10분 연속 녹화 on | 10분 시점 fps / 시작 fps | | 기록 |
+| B1 | 카메라 하드웨어 레벨 | 후면 | LEGACY/LIMITED/FULL/LEVEL_3 | FULL(adb 사전 확인, 1차 M0에서 앱으로 재확인) | 기록 |
+| B2 | stream sharing 적용 여부 | 3 use case 바인딩 | 적용/미적용 | 1차: 적용 | 기록 |
+| B3 | 3 use case 동시 분석 fps — 녹화 off | Preview + ImageAnalysis, 엔진별 | p50 / p5 fps | 1차 lite: 2 use case 15 / 14 → 목표 30 fps 지정 시 28 / 24(P8) | p50 ≥ 20, p5 ≥ 15 |
+| B4 | 3 use case 동시 분석 fps — **녹화 on** | Preview + ImageAnalysis + VideoCapture(720p/30/목표 0.85 Mbps, 1차는 1.0 Mbps로 측정), 엔진별 | p50 / p5 fps | lite 28 / 25, full 29 / 27(1차, 사람 없음) | **p50 ≥ 20, p5 ≥ 15** |
+| B5 | YUV → RGB/비트맵 변환 비용 | ImageAnalysis 출력 형식별(YUV_420_888, RGBA_8888) | ms/프레임 p50/p95 | 1차 RGBA_8888: 0.3–0.5 / 1.3–3.0 ms | 기록(예산: 센서→분석기 ≤ 50 ms 안) |
+| B6 | 분석 입력 드롭률 | KEEP_ONLY_LATEST | 드롭 프레임 / 전체 | 1차: 2.8–10.6% | 기록 |
+| B7 | 오디오 출력 지연 | `SoundPool.play()` → 소리(240fps 슬로모션 또는 루프백) | p50 / p95 ms | 1차 미측정 | **p95 ≤ 100 ms**, 초과 시 6장 저지연 교체 |
+| B8 | 녹화 실제 비트레이트·크기 | 60초 / 120초 | MB, 평균 Mbps | 1차(목표 1.0, 60초만): 스트림 1.01–1.14 Mbps, 128초 환산 16.9–19.0 MB → **불합격**, 목표 0.85로 재측정(7장) | 128초 환산 ≤ 16 MB |
+| B9 | 카메라 오버헤드 비율 | B4 fps ÷ A1(또는 채택 엔진) fps | 비율 | 1차 산출 보류(B4에 사람 없음) | 기록(부록 A 전략 2) |
+| B10 | 발열·스로틀링 | 10분 연속 녹화 on | 10분 시점 fps / 시작 fps | 1차 미측정(60초 런 중 thermal 0→1) | 기록 |
 
 **C. Phase 2 선행 측정(MVP M0 범위 밖)** — 증빙 재인코딩(P1-H)의 60초/120초 소요 시간·배터리(WorkManager, 충전 조건 없음). Phase 2 착수 전에 측정한다. 단, 7장 폴백이 발동하면 MVP M0로 되돌린다.
+
+#### 1차 M0 결과 (2026-09-30, Flip7, 참고치)
+
+원자료는 비공개 파일 `docs/private/dataset/results/m0-flip7-20260930.md`·`m0-flip7-20260930.json`과 데스크톱 사전 측정 `docs/private/dataset/results/m0-desktop-20260930.json`에만 둔다. 이 값은 **성능 상한 참고치**이며 AC4 합격 근거로 쓰지 않는다(D6 §6.2). 스파이크 코드는 버렸다.
+
+**환경.** Galaxy Z Flip7(8.1과 같음). 라이브러리: MediaPipe `tasks-vision` **1.0.0**, CameraX **1.6.2**(core/camera2/lifecycle/video/view). 빌드: AGP **9.4.1** / Gradle **9.6.1** / JDK **21**, compile·target SDK 36, release 빌드. 모델: `pose_landmarker_lite.task`, `pose_landmarker_full.task`. 조건: **충전 중, 화면 켬, 메모리 부하 높음**(시작 시 거의 가득 참), 런 사이 휴식 60초(프로토콜은 2분). 발열: 재생 측정 전 구간 thermalStatus 0, 실카메라 측정 중 **0 → 1**(LIGHT).
+
+**A. 영상 재생(VIDEO 모드).** fps = 1000 / 추론 ms. 입력은 정면 1개·후면 1개(템플릿 조건인 1080p·60초 이상·3개와 다름, 아래 주의). 검출률은 모든 런에서 1.0.
+
+| 영상 | 모델 | 위임 | 추론 p50 / p95 ms | fps p50 / p5 |
+|---|---|---|---|---|
+| 후면(405×720, 24fps) | lite | CPU | 37.4 / 42.6 | 26.8 / 23.5 |
+| 〃 | lite | GPU | 23.5 / 30.0 | 42.6 / 33.4 |
+| 〃 | full | CPU | 59.8 / 109.2 | 16.7 / 9.2 |
+| 〃 | full | GPU | 28.4 / 36.4 | 35.2 / 27.5 |
+| 정면(1050×1650, 30fps) | lite | CPU | 44.6 / 50.4 | 22.4 / 19.9 |
+| 〃 | lite | GPU | 32.0 / 44.7 | 31.3 / 22.4 |
+| 〃 | full | CPU | 54.1 / 68.2 | 18.5 / 14.7 |
+| 〃 | full | GPU | 37.0 / 49.1 | 27.0 / 20.4 |
+
+- 변환 비용(A5): 디코드 + YUV→RGB가 프레임당 p50 **20–26 ms**(p95 24–33 ms). Bitmap → MPImage 감싸기는 **0.05 ms 미만**. 디코드를 포함한 종단 처리량은 12–23 fps다.
+- 결정성(A6): 후면 lite CPU 3회에서 카운트·TOP 시각이 모두 같았다. 추론 ms는 회차마다 흔들렸다(p50 34.1–37.4 ms).
+- GPU 위임은 CPU보다 **1.4–2.1배** 빨랐다. GPU 초기화는 0.4–0.6초로 CPU보다 길다.
+
+**B. 실카메라(후면, LIVE_STREAM, CPU, 60초 창).** 분석 스트림 640×480 RGBA_8888, `KEEP_ONLY_LATEST`. fps는 결과 콜백 수를 1초 창마다 센 값이다.
+
+| 런 | use case | 녹화 | fps p50 / p5 | 추론 p50 / p95 ms | 드롭률 |
+|---|---|---|---|---|---|
+| lite, 3회 합산(180개 창) | 3 | on | **28 / 25** | 41–55 / 70–77 | 4.7–10.4% |
+| full, 1회 | 3 | on | **29 / 27** | 40 / 67 | 2.8% |
+| lite, VideoCapture 바인딩·녹화 안 함 | 3 | off | 27 / 25 | 54 / 78 | 10.6% |
+| lite, Preview + Analysis만 | 2 | off | **15 / 14** | 55 / 73 | 0% |
+| lite, 2 use case + 목표 30 fps | 2 | off | 28 / 24 | 47 / 73 | 6.9% |
+
+- 하드웨어 레벨 **FULL**(B1). **stream sharing 적용됨**(B2): VideoCapture를 바인딩한 모든 런에서 확인, 2 use case 런에서는 없음.
+- 실제 스트림: 분석 **640×480**, 프리뷰 **1080×1440**, 녹화 **720×1280**.
+- 변환(B5): `ImageProxy.toBitmap()`(RGBA_8888) p50 0.3–0.5 ms, p95 1.3–3.0 ms.
+- 비트레이트(B8): `setTargetVideoEncodingBitRate(1_000_000)` 호출은 기기에서 동작했다(**VERIFIED**). 실제 영상 스트림은 **1.01–1.14 Mbps**(목표 대비 +1–14%), 컨테이너 전체는 1.06–1.19 Mbps(+6–19%), 29.9 fps, H.264, 오디오 없음. 128초 환산 16.9–19.0 MB로 16 MB 상한을 넘어 목표를 0.85 Mbps로 낮췄다(7장).
+- 카메라 입력이 30 fps라 분석 fps의 상한은 카메라 fps다.
+
+**주의(이 결과로 확정할 수 없는 것).**
+1. **실카메라 런 전부에 사람이 화면에 없었다.** 이때 MediaPipe는 사람 검출기만 돌고 랜드마크 모델은 돌지 않는다. 그래서 B의 lite·full 수치가 거의 같고, 실제 세션과 부하가 다르다. **B로는 lite와 full을 비교할 수 없다.**
+2. 재생 입력은 60초보다 짧고(정면 35.7초, 후면 17.8초) 1080p가 아니며 2개뿐이다.
+3. 충전 중·화면 켬·메모리 부하 높음·휴식 60초 조건이다. **ML Kit(A3), 오디오 지연(B7), 10분 발열(B10)은 하지 않았다.** B8은 60초 녹화만 쟀다.
+
+**결정과 후속 작업.**
+- **(a) 포즈 엔진 기본값은 MediaPipe lite 유지, GPU 위임 우선.** 재생 경로에서 GPU가 CPU보다 1.4–2.1배 빨랐다(GPU 초기화 0.4–0.6초). 최종 결정(5장 결정 기록란)은 사람이 화면에 있는 실카메라 측정 후에 한다.
+- **(b) 카메라 목표 프레임률 30 지정(3.2 P8).** VideoCapture를 바인딩하지 않으면 실내 조명에서 카메라가 15 fps로 내려갔다. 캡처 설정에 목표 프레임률 30(예: `setTargetFrameRate(30, 30)`)을 넣자 p50 28 / p5 24가 됐다. 8.3 저하 사다리를 적용하기 전에 이 설정이 들어가 있는지 먼저 확인한다.
+- **(c) 스레드 배치 튜닝(후속).** 기기 CPU 추론이 데스크톱(lite 7.7 ms, full 12.7 ms)보다 4–5배 느렸고, 추론 스레드가 중간 코어에 배치되고 prime 코어는 쓰이지 않았다. 스레드 우선순위·코어 지정 튜닝은 후속 작업이다.
+- **(d) 정확도는 D2 구현으로 평가한다.** 데스크톱·기기 스파이크의 크루드 카운터는 D2 알고리즘이 아니며 크게 적게 셌다(정면 정답 22 → 6–13, 후면 정답 12 → 7–9). 정확도는 D2 구현을 `VideoReplaySource`로 돌려 D6 절차로 평가한다. M0 정면 클립은 촬영 가이드를 어겼다(카메라 고정 안 됨, 피사체가 프레임 높이의 약 40%)(D6 §2.3-C).
+- **(e) 녹화 목표 비트레이트 0.85 Mbps로 하향, 기기에서 재측정(7장).**
+- 재측정 계획(사람 있는 실카메라, 2분 휴식, 충전 안 함, 10분 발열, 오디오 지연)은 D6 §6.2에 둔다.
 
 ### 8.3 저하 사다리 (20 fps 미달 시)
 
@@ -332,6 +388,8 @@ B4(녹화 on)가 p50 < 20 fps 또는 p5 < 15 fps면 아래 순서로 한 단계�
 | ④ | **분석 프레임 기반 인코딩**(VideoCapture 제거, ImageAnalysis 프레임을 직접 인코딩) | 3번째 use case 제거로 stream sharing 회피 | 구현 복잡도 증가, 녹화 fps가 분석 fps에 묶임 |
 
 "엄격 모드에서만 녹화"는 엄격 모드 자체의 fps를 개선하지 못하므로 사다리에 넣지 않는다.
+
+사다리 적용 전 확인: 카메라 목표 프레임률 30이 설정돼 있어야 한다(3.2 P8). 1차 M0에서 이 설정 없이 VideoCapture를 뺀 바인딩은 실내 조명에서 15 fps로 떨어졌다. 이것은 추론 부하가 아니라 카메라 AE 프레임 범위 문제이므로 사다리 단계로 해결되지 않는다. 특히 ④(VideoCapture 제거)를 적용할 때 반드시 함께 확인한다.
 
 ---
 

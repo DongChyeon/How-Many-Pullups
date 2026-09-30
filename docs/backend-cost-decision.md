@@ -15,7 +15,7 @@
 | MVP 비용 게이트 | **G0 충족**: 최악 DB ≈ 61 MB(≈12%), Egress ≈ 0.24 GB(≈5%), Storage 0 |
 | rep 타임라인 하드 상한 | **16 KB/세션**(§M4.6a). D2 `compact` 형식(rep당 ≈17 B) 기준 약 947 rep까지 수용 — rep 수만으로는 제출을 거부하지 않는다 |
 | 제출 경로 | 서버 함수(RPC) 1개로만 제출. RLS가 테이블 직접 쓰기를 막음 |
-| 부정 방지(MVP) | 엄격 모드 리더보드 제출에만 레이트 리밋, Play Integrity, 2단계 rep 시간 검사, 물리 일관성 거부, 이상 FLAG(노출 유지), rep 타임라인, 신고/숨김. **고정 rep 수 상한은 두지 않는다** |
+| 부정 방지(MVP) | 엄격 모드 리더보드 제출에만 레이트 리밋, Play Integrity, 2단계 rep 시간 검사, 물리 일관성 거부, 이상 FLAG(노출 유지, 뷰 의심 `viewSuspect` 포함), rep 타임라인, 신고/숨김. **고정 rep 수 상한은 두지 않는다** |
 | Phase 2 진입 트리거 | **월 신고 건수 > 20건** (단일 조건, 2026-09-27 사용자 확정) |
 | Phase 2 | 영상 증빙 검증 시스템(Verified/전체 2탭, G1, P1–P7, R1, 해시 바인딩). 착수 시 G1 재평가 |
 
@@ -202,14 +202,15 @@ create function submit_leaderboard_entry(
   p_reps int, p_session_started_at timestamptz, p_session_duration_ms int,
   p_timeline jsonb, p_app_version text, p_pose_engine text,
   p_integrity_token text, p_capture_mode text, p_mode text,
-  p_video_sha256 text default null
+  p_video_sha256 text default null,
+  p_view_suspect boolean default false   -- D2 §3.6 viewSuspect. FLAG 전용, 거부 사유 아님(M4.5)
 ) returns jsonb
 language plpgsql security definer set search_path = public as $$
 begin
   -- 1) auth.uid() 확인 2) p_capture_mode = 'FRONT_MEASURE' AND p_mode = 'STRICT' 확인
   -- 3) 레이트 리밋 4) 입력 형식 5) 물리 일관성 검사
   -- 6) PB 여부 7) INSERT(verification_status는 컬럼 기본값 'UNVERIFIED')
-  -- 8) 이상 FLAG 판정 9) 이전 타임라인 교체 10) {status, reason_code} 반환
+  -- 8) 이상 FLAG 판정(viewSuspect 포함) 9) 이전 타임라인 교체 10) {status, reason_code} 반환
   ...
 end $$;
 revoke all on function submit_leaderboard_entry from public, anon;
@@ -223,10 +224,10 @@ grant execute on function submit_leaderboard_entry to authenticated;
 | 1 | 로그인 사용자(`auth.uid()` 존재) | `AUTH_REQUIRED` |
 | 2 | **`p_capture_mode = 'FRONT_MEASURE'` AND `p_mode = 'STRICT'`인지** — 그 밖의 모든 조합(`BACK_POSTURE`, `PRACTICE`, 알 수 없는 값 등)은 이 단계에서 거부한다 | `REQUIRES_FRONT_STRICT` |
 | 3 | 레이트 리밋(M4.1) | `RATE_LIMITED` |
-| 4 | 형식: reps ≥ 1, 타임라인 JSON ≤ 16 KB(§M4.6a), 필수 키 존재, `videoSha256`는 null 또는 `^[0-9a-f]{64}$`, Integrity 토큰 존재 | `INVALID_PAYLOAD`, `INTEGRITY_TOKEN_MISSING` |
+| 4 | 형식: reps ≥ 1, 타임라인 JSON ≤ 16 KB(§M4.6a), 필수 키 존재, `videoSha256`는 null 또는 `^[0-9a-f]{64}$`, Integrity 토큰 존재. `viewSuspect`와 타임라인 `vs`(D2 §12.3)는 선택 값이며, 없으면 false/0으로 본다. 둘이 서로 다르면 거부하지 않고 **true로 간주**한다 | `INVALID_PAYLOAD`, `INTEGRITY_TOKEN_MISSING` |
 | 5 | 물리 일관성(M4.3·M4.4) | `REP_TOO_FAST`, `DURATION_INCONSISTENT`, `TIMESTAMP_NON_MONOTONIC`, `REP_COUNT_MISMATCH`, `OUT_OF_PHYSICAL_RANGE` |
 | 6 | 본인 현재 PB보다 큰지 | `NOT_PERSONAL_BEST` |
-| 7 | 저장 + FLAG 판정(M4.5) + Integrity 검증 예약(M4.2) | — (`{status: "ACCEPTED", flagged: bool}` 반환) |
+| 7 | 저장 + FLAG 판정(M4.5, `VIEW_SUSPECT` 포함) + Integrity 검증 예약(M4.2) | — (`{status: "ACCEPTED", flagged: bool}` 반환) |
 
 클라이언트는 자세 분석 모드(후면, `BACK_POSTURE`) 세션과 측정 모드(정면)의 연습(`PRACTICE`) 세션에서는 애초에 `submit_leaderboard_entry`를 호출하지 않는다(로컬 저장만). 위 2번 검사는 클라이언트 우회·변조 제출에 대한 서버 측 마지막 방어선이다.
 
@@ -283,9 +284,11 @@ T_floor 근거: 엄격 rep은 완전 신전 → 턱이 바 위 → 완전 신전
 | **PB 급등**: 새 reps > 직전 PB + max(5, 0.3 × 직전 PB) (2026-09-27 사용자 확정) | `flagged = true`, `flag_reasons += PB_JUMP` |
 | rep 시간 FLAG 구간(M4.3) | `flagged = true`, `flag_reasons += FAST_REP` |
 | Integrity 기기 판정만 미달(M4.2) | `flagged = true`, `flag_reasons += DEVICE_INTEGRITY` |
+| **뷰 의심**: 제출 `viewSuspect = true` 또는 타임라인 `vs = 1`(D2 §3.6·§3.6.1, 2026-09-30) | `flagged = true`, `flag_reasons += VIEW_SUSPECT`. **자동 거부·숨김 없음, 노출 유지**, 운영자 알림 대상 |
 
 - 예: 직전 PB 10 → 급등 기준 10 + max(5, 3) = 15 초과(16회부터 FLAG). 직전 PB 30 → 30 + max(5, 9) = 39 초과.
 - **FLAG된 기록은 운영자가 숨기기 전까지 계속 노출된다.**
+- `VIEW_SUSPECT` 근거: 측정 모드에서 찍은 후면 영상은 클라이언트가 믿을 만하게 차단할 수 없다(MediaPipe가 후면에서도 얼굴 랜드마크를 만들어 냄, D2 §3.4). 휴리스틱은 UNVERIFIED이고 오탐이 있을 수 있으므로 거부하지 않고 FLAG만 한다(강자 불이익 금지). 운영자는 타임라인을 보고 판단하며, 필요하면 M5 신고·숨김 절차로 숨긴다. `viewSuspect`는 페이로드에 1바이트 수준만 더하므로 M2 비용 추정에 영향이 없다.
 - 운영자 알림: 기본안은 **일 1회 GitHub Actions 점검 작업**이 운영 뷰(`ops_flagged_unreviewed`)의 미검토 건수를 조회하고, 1건 이상이면 작업을 실패 처리해 GitHub 실패 알림 메일(G-A3)을 받는 방식이다(무료, 추가 서비스 불필요). DB 웹훅 → Edge Function → 외부 메일 발송은 메일 서비스의 무료 가용성이 UNVERIFIED라 채택하지 않는다. 최후 폴백: 운영자가 대시보드의 flagged 뷰를 일 1회 확인.
 
 ### M4.6 rep 메타데이터 타임라인 저장
@@ -408,6 +411,9 @@ create view ops_monthly_reports as
 | N14 | 타임라인에 `NO_END` 플래그 rep 1개(세션 종료 시 미완료) + 정상 유효 rep 29개, 제출 `reps = 29`(`NO_END` rep 제외하고 계산) | 거부되지 않음, 정상 노출. `reps`는 29로 저장 |
 | N15 | N14와 같은 타임라인이지만 제출 `reps = 30`(`NO_END` rep까지 포함해 계산) | `REP_COUNT_MISMATCH`로 거부 |
 | N16 | `NO_END` rep의 `durationMs`/`dE`가 비정상 값(예: 세션 길이보다 긴 값)이어도 나머지 rep은 모두 정상 | `OUT_OF_PHYSICAL_RANGE`·`TIMESTAMP_NON_MONOTONIC` 모두 이 rep에는 적용되지 않아 거부되지 않음, 정상 노출 |
+| N21 | 그 밖에는 정상인 엄격 제출에 `viewSuspect = true`, 타임라인 `vs = 1` | **거부되지 않음**, `flagged = true`(VIEW_SUSPECT), 공개 뷰에 **노출 유지**, 다음 일일 점검에서 `ops_flagged_unreviewed` 미검토 건수에 포함(운영자 알림) |
+| N21b | `viewSuspect = false`인데 타임라인 `vs = 1`(또는 그 반대) | 거부되지 않음, true로 간주해 `flagged = true`(VIEW_SUSPECT), 노출 유지 |
+| N21c | `viewSuspect` 필드 없음, 타임라인에 `vs` 없음(구버전 클라이언트) | 거부되지 않음, VIEW_SUSPECT FLAG 없음 |
 | N17 | 타임라인 JSON 크기 16 KB 이하(예: `compact` 형식 900 rep 상당) | 거부되지 않음(rep 수만으로 거부하지 않는다는 원칙 확인) |
 | N18 | 타임라인 JSON 크기 > 16 KB | `INVALID_PAYLOAD`로 거부 |
 | N19 | `captureMode = BACK_POSTURE`(자세 분석 모드/후면), `mode`는 무엇이든 제출 | `REQUIRES_FRONT_STRICT`로 거부, 행 없음 |
@@ -441,7 +447,7 @@ Phase 2는 **진입 트리거(월 신고 > 20건)** 가 충족되면 착수를 �
 ## P1. 설계 전제 (G1의 일부로 강제)
 
 - **P1 하드 업로드 상한 10 MB/클립 (Phase 2 신규 세션).** 클라이언트가 `비트레이트 = min(1.5 Mbps, 10 MB × 8 / 길이)`로 재인코딩한다(60초 → 1.33 Mbps, 120초 → 0.67 Mbps). 120초를 넘는 세트는 증빙 불가(수동 문의). 계산된 비트레이트가 1 Mbps 미만(= 80초 초과)이면 480p로 낮춰 인코딩한다. 서버는 증빙 버킷의 file size limit = 10 MB, MIME = `video/mp4`로 이중 강제한다(S13).
-- **P1-H 해시 대상·시점.** 엄격 세션은 종료 직후 "증빙 파일"을 기기에 확정하고, 그 파일의 SHA-256을 sessionId와 함께 로컬 DB에 기록한다. 증빙 호환 프리셋(720p/30fps, 1.0 Mbps)으로 녹화한 원본이 10 MB 이하(≈ 80초 이하)면 원본이 곧 증빙 파일이고, 넘으면 P1 규칙으로 한 번 재인코딩한 파일이 증빙 파일이다. 서버·검수 도구는 **업로드 파일 해시 = 제출 해시**만 대조한다. 원본·업로드 이중 해시(옵션 b)는 원본 삭제 시 검증 가치가 없고 매칭 규칙이 복잡해 기각.
+- **P1-H 해시 대상·시점.** 엄격 세션은 종료 직후 "증빙 파일"을 기기에 확정하고, 그 파일의 SHA-256을 sessionId와 함께 로컬 DB에 기록한다. 증빙 호환 프리셋(720p/30fps, 목표 0.85 Mbps, D4 §7)으로 녹화한 원본이 10 MB 이하(실측 오버슈트 최대 14% 기준 ≈ 80초 이하)면 원본이 곧 증빙 파일이고, 넘으면 P1 규칙으로 한 번 재인코딩한 파일이 증빙 파일이다. 서버·검수 도구는 **업로드 파일 해시 = 제출 해시**만 대조한다. 원본·업로드 이중 해시(옵션 b)는 원본 삭제 시 검증 가치가 없고 매칭 규칙이 복잡해 기각.
 - **P2 Phase 2 보드 = all-time 1개**(Verified 탭 기준). 주간 보드는 매주 Top N 전원이 증빙 대상이 되어 제외(반례 3).
 - **P3 N은 모집단 비례:** `N = min(50, ceil(0.1 × 최근 30일 업로더 수))`. 업로더 300명 → N = 30. N은 주 1회만 재계산하고 1회 증가폭 ≤ +5.
 - **P4 증빙 대상:** "Top N 신규 진입 **또는** Top N 내 사용자의 PB 갱신"(2026-09-27 사용자 승인). 전 사용자 PB를 증빙 대상으로 하면 G1이 깨진다(반례 2).
@@ -564,7 +570,7 @@ P1-H: 업로드 파일 해시 = 세션 종료 직후 기록한 증빙 파일 해
 
 **결정: 서버가 원본 해시를 대조한다. 재인코딩하지 않는다.** 결정적 재인코딩(같은 원본 → 같은 바이트)은 하드웨어 인코더·OS 버전에 따라 보장되지 않아 기각.
 
-- MVP부터 엄격 세션을 증빙 호환 프리셋(720p/30fps, 목표 1.0 Mbps)으로 녹화해, 원본 자체가 업로드 가능한 크기가 되게 한다: 80초 세트 ≈ 10 MB, 128초 세트 ≈ 16 MB.
+- MVP부터 엄격 세션을 증빙 호환 프리셋(720p/30fps, 목표 0.85 Mbps)으로 녹화해, 원본 자체가 업로드 가능한 크기가 되게 한다: 목표 0.85 Mbps에 실측 오버슈트 최대 14%를 적용하면 **128초 ≤ 약 15.5 MB**(80초 ≈ 9.7 MB)다. 초안 목표 1.0 Mbps는 Flip7 1차 M0(2026-09-30)에서 실제 1.01–1.14 Mbps로 나와 128초 환산 16.9–19.0 MB가 16 MB를 넘었으므로 낮췄다(D4 §7). 기기 재측정으로 확인한다.
 - 과거 PB 증빙 버킷 상한 **16 MB**(Phase 2 신규 세션은 10 MB 유지). 128초를 넘는 과거 PB 세트는 제출 불가(PRD 고지).
 - 폴백: CameraX `Recorder`의 목표 비트레이트 지정이 불가하면(UNVERIFIED, M0에서 확인) MVP에서 세션 종료 직후 WorkManager로 한 번 재인코딩하고 **그 결과 파일**을 보관·해시한다. 이 경우 MVP 제출의 `videoSha256`도 그 결과 파일의 해시다.
 

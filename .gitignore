@@ -22,3 +22,6 @@ docs/private/
 videos/
 *.mp4
 *.mov
+
+# Throwaway spikes (M0 prototype etc.)
+spikes/
