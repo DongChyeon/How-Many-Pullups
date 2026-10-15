@@ -25,3 +25,13 @@ videos/
 
 # Throwaway spikes (M0 prototype etc.)
 spikes/
+
+# landmark-extract tool
+.venv/
+tools/landmark-extract/models/
+*.task
+
+# Build outputs
+build/
+.gradle/
+.kotlin/
