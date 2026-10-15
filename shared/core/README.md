@@ -8,4 +8,4 @@ Targets:
 
 Commands:
 - `./gradlew :shared:core:jvmTest` runs the D2 §13 golden cases and the calibration tests on synthetic landmarks.
-- `./gradlew :shared:core:evalLandmarks -Pdir=docs/private/dataset/landmarks [-Pmeta=<dir>]` replays landmark dumps and compares the counts with the ground truth. It only prints results and writes no files.
+- `./gradlew :shared:core:evalLandmarks -Pdir=docs/private/dataset/landmarks [-Pmeta=<dir>]` replays landmark dumps and compares the counts with the ground truth. It only prints results and writes no files. Videos whose meta has `"excludeFromEval": true` are skipped and listed as excluded. `-Ptrace=<file substring>` prints a per-frame trace (raw elbow angle, clearance h, effective θ_ext, state).

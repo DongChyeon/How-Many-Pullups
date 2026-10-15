@@ -51,6 +51,8 @@ internal class PosePx(val pose: Pose, val width: Int, val height: Int, private v
     fun yNorm(i: Int): Double = lm[i].y.toDouble()
     fun visibility(i: Int): Double = if (i < lm.size) lm[i].visibility.toDouble() else 0.0
 
+    val hasWorld: Boolean get() = pose.worldLandmarks?.let { it.size >= Lm.COUNT } == true
+
     /** Depth for yaw / V-z: world z when available, else normalized z (same scale as normalized x). */
     fun depthPair(i: Int): Pair<Double, Double>? {
         val world = pose.worldLandmarks

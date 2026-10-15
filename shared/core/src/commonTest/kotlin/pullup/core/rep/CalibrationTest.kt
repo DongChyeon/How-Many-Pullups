@@ -86,6 +86,7 @@ class CalibrationTest {
             PoseFrame(t, lms, Synth.W, Synth.H, worldLandmarks = world)
         }
         near(26.565, d.calibration!!.psiDeg, tol = 0.01, what = "psi from world (atan(0.2/0.4))")
+        assertTrue(d.calibration!!.psiFromWorld)
     }
 
     @Test
@@ -120,13 +121,65 @@ class CalibrationTest {
 
     @Test
     fun no_full_hang_blocks_strict_and_warns_practice() {
-        val (strict, ev) = calibrate { hangFrame(it, Body(theta = 150.0)) }
+        // θ_hang 125° < θ_floor_abs 120° + margin 10°: a bent-arm calibration.
+        val (strict, ev) = calibrate { hangFrame(it, Body(theta = 125.0)) }
         assertEquals(RepState.IDLE, strict.state)
         assertTrue(CalBlockReason.NO_FULL_HANG in ev.filterIsInstance<RepEvent.CalibrationBlocked>().single().reasons)
 
-        val (practice, pev) = calibrate(countMode = CountMode.PRACTICE) { hangFrame(it, Body(theta = 150.0)) }
+        val (practice, pev) = calibrate(countMode = CountMode.PRACTICE) { hangFrame(it, Body(theta = 125.0)) }
         assertEquals(RepState.HANG_WAIT, practice.state)
         assertTrue(pev.any { it is RepEvent.Warning && it.type == WarningType.NO_FULL_HANG })
+        near(120.0, practice.calibration!!.thetaExtDeg, what = "θ_ext falls back to the absolute floor")
+    }
+
+    @Test
+    fun low_natural_hang_calibrates_with_relative_theta_ext() {
+        // 150° used to block (absolute θ_ext 160° − 5°); now θ_ext = 150° − Δ_ext 10° = 140°.
+        val (d, ev) = calibrate { hangFrame(it, Body(theta = 150.0)) }
+        assertEquals(RepState.HANG_WAIT, d.state)
+        assertTrue(ev.none { it is RepEvent.Warning && it.type == WarningType.NO_FULL_HANG })
+        near(150.0, d.calibration!!.thetaHangDeg, what = "θ_hang")
+        near(140.0, d.calibration!!.thetaExtDeg, what = "θ_ext")
+        assertTrue(d.finish().timeline!!.json.contains("\"te\":140"))
+    }
+
+    @Test
+    fun theta_ext_is_relative_with_absolute_floor() {
+        val cfg = RepConfig()
+        near(160.0, cfg.thetaExtFor(170.0), what = "170 - 10")
+        near(135.0, cfg.thetaExtFor(145.0), what = "145 - 10")
+        near(120.0, cfg.thetaExtFor(125.0), what = "floor")
+        near(150.0, RepConfig(deltaExtDeg = 20.0).thetaExtFor(170.0), what = "tunable Δ_ext")
+    }
+
+    @Test
+    fun side_view_from_normalized_z_only_warns_in_strict() {
+        // No world landmarks: ψ comes from normalized z (unreliable), so strict warns instead of blocking.
+        val (fallback, ev) = calibrate { hangFrame(it, Body(theta = 170.0, psiDeg = 40.0)) }
+        assertEquals(RepState.HANG_WAIT, fallback.state)
+        assertTrue(!fallback.calibration!!.psiFromWorld)
+        assertTrue(ev.any { it is RepEvent.Warning && it.type == WarningType.SIDE_VIEW })
+        assertTrue(ev.none { it is RepEvent.CalibrationBlocked })
+
+        // Same body with world landmarks: ψ is trusted and strict blocks.
+        val (world, wev) = calibrate { t ->
+            val b = Body(theta = 170.0, psiDeg = 40.0)
+            PoseFrame(t, b.landmarks(), Synth.W, Synth.H, worldLandmarks = b.worldLandmarks())
+        }
+        assertEquals(RepState.IDLE, world.state)
+        assertTrue(CalBlockReason.SIDE_VIEW in wev.filterIsInstance<RepEvent.CalibrationBlocked>().single().reasons)
+    }
+
+    @Test
+    fun world_landmarks_drive_view_depth_cue() {
+        // Normalized z says "back" (nose behind ears) but world z says "front": world wins.
+        val (d, _) = calibrate(countMode = CountMode.PRACTICE) { t ->
+            val b = Body(theta = 170.0)
+            val lms = b.landmarks().mapIndexed { i, l -> if (i == Lm.NOSE) l.copy(z = 0.1f) else l }
+            PoseFrame(t, lms, Synth.W, Synth.H, worldLandmarks = b.worldLandmarks())
+        }
+        assertTrue(d.calibration!!.psiFromWorld)
+        assertEquals(ViewVote.FRONT, d.calibration!!.viewCues.vz)
     }
 
     @Test

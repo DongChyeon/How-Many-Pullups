@@ -111,7 +111,10 @@ internal fun computeCalibration(
 ): CalibrationOutcome {
     val poses = samples.map { it.pose }
     val s2d = median(poses.mapNotNull { it.shoulderWidth() })!!
-    val psi = median(poses.mapNotNull { it.yawDeg() }) ?: 0.0
+    // ψ from world landmarks when the window has them; the normalized-z fallback is unreliable (§4.3).
+    val worldPoses = poses.filter { it.hasWorld }
+    val psiFromWorld = worldPoses.isNotEmpty()
+    val psi = median((if (psiFromWorld) worldPoses else poses).mapNotNull { it.yawDeg() }) ?: 0.0
     val s = s2d / max(cos(psi.toRad()), cfg.cosPsiFloor)
     val yBar = median(poses.flatMap { listOf(it.y(Lm.L_WRIST), it.y(Lm.R_WRIST)) })!!
     val yBarNorm = median(poses.flatMap { listOf(it.yNorm(Lm.L_WRIST), it.yNorm(Lm.R_WRIST)) })!!
@@ -132,7 +135,9 @@ internal fun computeCalibration(
 
     val beta = meta?.let { it.phiCamDeg + atan((0.5 - yBarNorm) * 2.0 * tan((it.vfovDeg / 2.0).toRad())).toDeg() }
 
-    val cues = viewCues(poses, s, cfg)
+    val thetaExt = cfg.thetaExtFor(thetaHang)
+
+    val cues = viewCues(if (psiFromWorld) worldPoses else poses, s, cfg)
     val expected = if (captureMode == CaptureMode.FRONT_MEASURE) ViewVote.FRONT else ViewVote.BACK
     val votes = listOf(cues.vz, cues.vx, cues.vn).filter { it != ViewVote.NA }
     val opposite = votes.count { it != expected }
@@ -157,8 +162,10 @@ internal fun computeCalibration(
     } else {
         angleCheck = AngleCheck.PASSED
     }
-    if (abs(psi) > cfg.sideViewPsiDeg) blockOrWarn(CalBlockReason.SIDE_VIEW, WarningType.SIDE_VIEW)
-    if (thetaHang < cfg.thetaExtDeg - cfg.noFullHangMarginDeg) blockOrWarn(CalBlockReason.NO_FULL_HANG, WarningType.NO_FULL_HANG)
+    if (abs(psi) > cfg.sideViewPsiDeg) {
+        if (psiFromWorld) blockOrWarn(CalBlockReason.SIDE_VIEW, WarningType.SIDE_VIEW) else warnings += WarningType.SIDE_VIEW
+    }
+    if (thetaHang < cfg.thetaFloorAbsDeg + cfg.noFullHangMarginDeg) blockOrWarn(CalBlockReason.NO_FULL_HANG, WarningType.NO_FULL_HANG)
     if (viewSuspect) warnings += WarningType.VIEW_MISMATCH_SUSPECTED
     if (captureMode == CaptureMode.FRONT_MEASURE && hHang == null) warnings += WarningType.NO_FACE_AT_CALIBRATION
 
@@ -172,9 +179,11 @@ internal fun computeCalibration(
             s = s,
             s2d = s2d,
             psiDeg = psi,
+            psiFromWorld = psiFromWorld,
             yBarPx = yBar,
             yBarNorm = yBarNorm,
             thetaHangDeg = thetaHang,
+            thetaExtDeg = thetaExt,
             hHang = hHang,
             aHang = aHang,
             pxRefPx = pxRef,

@@ -6,7 +6,9 @@ package pullup.core.rep
  */
 data class RepConfig(
     // §11.1 judging
-    val thetaExtDeg: Double = 160.0, // A1
+    // A1: extension is relative to the calibrated hang. theta_ext = max(theta_hang - deltaExtDeg, thetaFloorAbsDeg).
+    val deltaExtDeg: Double = 10.0, // A1
+    val thetaFloorAbsDeg: Double = 120.0, // A1b
     val thetaHystDeg: Double = 10.0, // A2
     val thetaAttemptDeg: Double = 110.0, // A3
     val k: Double = 0.0, // B1
@@ -41,11 +43,11 @@ data class RepConfig(
     // §11.3 geometry and capture
     val betaMaxDeg: Double = 25.0, // C1
     val betaMinDeg: Double = -10.0, // C2
-    val sideViewPsiDeg: Double = 20.0, // C3
+    val sideViewPsiDeg: Double = 20.0, // C3 (blocks in strict only when psi comes from world landmarks)
     val mEar: Double = 0.30, // P1
     val viewSuspectMinVotes: Int = 2, // C4
     val cosPsiFloor: Double = 0.5, // G1
-    val noFullHangMarginDeg: Double = 5.0, // G2
+    val noFullHangMarginDeg: Double = 10.0, // G2: NO_FULL_HANG when theta_hang < thetaFloorAbsDeg + this
     val cChin: Double = 0.12, // G3
     val cNm: Double = 0.10, // G4
     // Values D2 states in prose but not in §11
@@ -53,4 +55,7 @@ data class RepConfig(
     val depressOnsetDelta: Double = 0.05, // §5.7 (a)
     // Implementation choice (D2 gives no number): V-n votes FRONT when |nose x - ear-mid x| / S <= this
     val viewNoseOffsetMax: Double = 0.25,
-)
+) {
+    /** Effective extension threshold theta_ext for a calibrated hang angle (D2 §4.1, §11 A1). */
+    fun thetaExtFor(thetaHangDeg: Double): Double = maxOf(thetaHangDeg - deltaExtDeg, thetaFloorAbsDeg)
+}

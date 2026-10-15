@@ -383,7 +383,65 @@ class GoldenCasesTest {
     @Test
     fun front_strict_side_view_blocks() {
         val r = Scenario(1500).apply { psiDeg = 40.0 }.run()
+        assertTrue(r.calibration == null)
         assertTrue(CalBlockReason.SIDE_VIEW in r.events.filterIsInstance<RepEvent.CalibrationBlocked>().single().reasons)
+
+        // Without world landmarks ψ is the unreliable normalized-z fallback: warn, do not block.
+        val f = Scenario(1500, world = false).apply { psiDeg = 40.0 }.run()
+        assertTrue(f.events.none { it is RepEvent.CalibrationBlocked })
+        assertTrue(WarningType.SIDE_VIEW in f.warnings)
+    }
+
+    // ---- Relative extension (§4.1, §11 A1): θ_ext = max(θ_hang − Δ_ext, θ_floor_abs)
+
+    @Test
+    fun low_natural_hang_still_counts_in_strict() {
+        // Natural hang 145° (θ_ext 135°). Under the old absolute 160° this never calibrated (NO_FULL_HANG).
+        val r = Scenario(8500, hangTheta = 145.0).rep(2000).rep(4000).rep(6000).run()
+        r.assertCount(3)
+        assertTrue(r.noCounts.isEmpty(), r.debug())
+        assertEquals(135.0, r.calibration!!.thetaExtDeg, 0.01)
+        r.assertTimeline()
+    }
+
+    private fun bentArmHalfRep(): Scenario {
+        // Hang 145° (θ_ext 135°). Rep 1 is full; after it the arms only open to 120° (< θ_ext) before rep 2;
+        // rep 3 starts from a full hang again.
+        val sc = Scenario(8500, hangTheta = 145.0).rep(5200)
+        sc.theta.add(2000, Keys(0 to 145.0, 600 to 40.0, 900 to 40.0, 1300 to 120.0, 1500 to 120.0, 1800 to 40.0, 2100 to 40.0, 2700 to 145.0))
+        val hKeys = listOf(0 to -1.2, 600 to 0.2, 900 to 0.2, 1300 to -0.8, 1500 to -0.8, 1800 to 0.2, 2100 to 0.2, 2700 to -1.2)
+        sc.h.add(2000, Keys(*hKeys.toTypedArray()))
+        sc.a.add(2000, Keys(*hKeys.map { it.first to Synth.aFromH(it.second) }.toTypedArray()))
+        return sc
+    }
+
+    @Test
+    fun bent_arm_half_rep_is_no_count_in_strict_with_low_hang() {
+        val strict = bentArmHalfRep().run()
+        strict.assertCount(2)
+        val nc = strict.noCounts.single()
+        assertEquals(ReasonCode.INCOMPLETE_EXTENSION, nc.reason)
+        assertEquals(Voice.NO_COUNT, nc.voice)
+        strict.assertTimeline()
+    }
+
+    @Test
+    fun bent_arm_hang_cannot_lower_the_bar_below_the_floor() {
+        // θ_hang 125°: strict blocks (NO_FULL_HANG); practice-style back mode warns and θ_ext = floor 120°.
+        val strict = calOnly(Synth.meta()) { theta.add(0, Keys(0 to 125.0, 1500 to 125.0)) }
+        assertTrue(CalBlockReason.NO_FULL_HANG in strict.events.filterIsInstance<RepEvent.CalibrationBlocked>().single().reasons)
+
+        val back = Scenario(1500, back = true, hangTheta = 125.0).run()
+        assertTrue(WarningType.NO_FULL_HANG in back.warnings)
+        assertEquals(120.0, back.calibration!!.thetaExtDeg, 0.01)
+    }
+
+    @Test
+    fun back_low_natural_hang_counts() {
+        val r = Scenario(8500, back = true, hangTheta = 145.0).repBack(2000).repBack(4000).repBack(6000).run()
+        r.assertCount(3)
+        assertTrue(r.counts.all { it.estimated })
+        assertTrue(r.noCounts.isEmpty(), r.debug())
     }
 
     @Test

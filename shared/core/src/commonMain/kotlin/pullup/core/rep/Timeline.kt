@@ -23,6 +23,7 @@ internal fun buildTimeline(
     endMs: Long,
     fpsP50: Double,
     betaDeg: Double?,
+    thetaExtDeg: Double,
     captureMode: CaptureMode,
     countMode: CountMode,
     source: SourceKind,
@@ -63,7 +64,7 @@ internal fun buildTimeline(
         append(",\"beta\":").append(betaDeg?.roundToInt()?.toString() ?: "null")
         append(",\"view\":\"").append(if (captureMode == CaptureMode.FRONT_MEASURE) "F" else "B").append('"')
         append(",\"vs\":").append(if (viewSuspect) 1 else 0)
-        append(",\"thr\":{\"te\":").append(cfg.thetaExtDeg.roundToInt())
+        append(",\"thr\":{\"te\":").append(thetaExtDeg.roundToInt())
         append(",\"k\":").append(cfg.k.toString())
         append(",\"td\":").append(cfg.tDwellMs)
         append(",\"tf\":").append(cfg.tFloorMs)

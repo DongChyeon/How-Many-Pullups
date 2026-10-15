@@ -164,9 +164,29 @@ internal fun Body.landmarks(): List<Landmark> {
     }
 }
 
-/** A scripted session: tracks + visibility windows + optional second person. */
-internal class Scenario(val endMs: Long, val back: Boolean = false) {
-    val theta = Track(170.0)
+/**
+ * World landmarks (meters, hip-centered in MediaPipe; here centered on the trunk x / bar y, which only shifts
+ * them) for the same body: pixel offsets scaled so the shoulder width S is [SHOULDER_M] m. Depth uses the
+ * same pixel-space z the normalized landmarks encode (z_norm * W), so ψ and V-z agree between the two.
+ */
+internal fun Body.worldLandmarks(): List<Landmark> = landmarks().map {
+    val m = SHOULDER_M / s
+    it.copy(
+        x = ((it.x * Synth.W - cx) * m).toFloat(),
+        y = ((it.y * Synth.H - Synth.Y_BAR) * m).toFloat(),
+        z = (it.z * Synth.W * m).toFloat(),
+    )
+}
+
+private const val SHOULDER_M = 0.4
+
+/**
+ * A scripted session: tracks + visibility windows + optional second person.
+ * [hangTheta] is the natural dead-hang elbow angle (θ_hang); templates start and end there.
+ * [world] = false omits world landmarks (normalized-z ψ fallback, §4.3).
+ */
+internal class Scenario(val endMs: Long, val back: Boolean = false, val hangTheta: Double = 170.0, val world: Boolean = true) {
+    val theta = Track(hangTheta)
     val h = Track(-1.2)
     val a = Track(1.5)
     val px = Track(0.0)
@@ -188,14 +208,14 @@ internal class Scenario(val endMs: Long, val back: Boolean = false) {
 
     /** Standard front template R(t0, P) (§13.1). */
     fun rep(t0: Long, p: Int = 300) = apply {
-        theta.add(t0, Keys(0 to 170.0, 600 to 40.0, 600 + p to 40.0, 1200 + p to 170.0))
+        theta.add(t0, Keys(0 to hangTheta, 600 to 40.0, 600 + p to 40.0, 1200 + p to hangTheta))
         h.add(t0, Keys(0 to -1.2, 600 to 0.2, 600 + p to 0.2, 1200 + p to -1.2))
         a.add(t0, Keys(0 to 1.5, 600 to 0.3, 600 + p to 0.3, 1200 + p to 1.5))
     }
 
     /** Back template R_b(t0, P) (§13.1): h replaced by e. */
     fun repBack(t0: Long, p: Int = 300) = apply {
-        theta.add(t0, Keys(0 to 170.0, 600 to 40.0, 600 + p to 40.0, 1200 + p to 170.0))
+        theta.add(t0, Keys(0 to hangTheta, 600 to 40.0, 600 + p to 40.0, 1200 + p to hangTheta))
         e.add(t0, Keys(0 to -0.9, 600 to 0.5, 600 + p to 0.5, 1200 + p to -0.9))
     }
 
@@ -223,7 +243,8 @@ internal class Scenario(val endMs: Long, val back: Boolean = false) {
         while (true) {
             val t = Synth.ts(n++)
             if (t > endMs) break
-            out += PoseFrame(t, body(t).landmarks(), Synth.W, Synth.H, otherPoses = others(t))
+            val b = body(t)
+            out += PoseFrame(t, b.landmarks(), Synth.W, Synth.H, worldLandmarks = if (world) b.worldLandmarks() else null, otherPoses = others(t))
         }
         return out
     }

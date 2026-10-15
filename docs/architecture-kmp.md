@@ -208,6 +208,7 @@ sequenceDiagram
 | P6 | **음성 트리거 위치** | 카운트 이벤트 발생 즉시 파이프라인 스레드에서 `SpeechOutput`을 호출한다(UI 스레드 경유 금지). 지연 예산은 D2. |
 | P7 | **좌표 정규화 경계** | 회전·미러링 보정은 어댑터(네이티브)에서 끝내고, 공통 모듈은 "세로 기준, 미러링 없음" 좌표만 받는다. 어깨폭 S 기준 정규화는 공통(D2). |
 | P8 | **카메라 목표 프레임률 30 고정** | `CameraSource` 캡처 설정에서 목표 프레임률을 30으로 고정한다(예: CameraX `setTargetFrameRate(30, 30)`에 해당하는 설정). 1차 M0(8.2)에서 VideoCapture 없이 Preview + ImageAnalysis만 바인딩하자 실내 조명에서 AE가 카메라를 15 fps로 내렸고, 목표 30 지정 시 p50 28 / p5 24로 회복했다. VideoCapture를 바인딩한 경우에도 같은 설정을 명시한다. |
+| P9 | **월드 랜드마크 필수(2026-10-15)** | `PoseEstimator` 어댑터는 `PoseFrame`에 정규화 랜드마크(`landmarks`)와 함께 **월드 랜드마크**(`worldLandmarks`, MediaPipe `worldLandmarks`/`pose_world_landmarks`, m, 골반 중심, 33점)를 반드시 넣는다. D2는 몸통 요 ψ와 V-z 뷰 신호를 월드 z로 계산한다([D2 §4.3](spec-rep-detection.md#43-어깨폭-s와-요-보정)). 정규화 이미지 z로 계산한 ψ는 실제 정면 클립에서 11–64°가 나와 거짓 측면 차단을 냈다. 월드 랜드마크가 없으면 공통 모듈은 정규화 z로 대체 계산하지만 측면 판정을 경고로만 낮추므로, 엄격 모드 품질 검사가 약해진다. |
 
 ---
 
@@ -218,7 +219,7 @@ sequenceDiagram
 | 인터페이스 | 책임 | 입력 → 출력 | Android 기술 | iOS 기술 | iOS 위험도 | 위험 근거 |
 |------------|------|-------------|--------------|----------|------------|-----------|
 | `FrameSource` | 분석용 프레임 공급(실시간 또는 재생) | 시작/정지 → 프레임 스트림(이미지 + 단조 타임스탬프) | `CameraSource`: CameraX `ImageAnalysis`(YUV_420_888 또는 RGBA_8888 출력) / `VideoReplaySource`: Media3·MediaCodec | `CameraSource`: `AVCaptureVideoDataOutput` / `VideoReplaySource`: `AVAssetReader` | 중 | Kotlin/Native에서 `CMSampleBuffer`·`CVPixelBuffer` 다루기, 회전 처리 |
-| `PoseEstimator` | 프레임 → 33 랜드마크 + visibility | 프레임 + 타임스탬프 → `PoseFrame` 또는 "인물 없음" | MediaPipe Tasks Vision `PoseLandmarker`(LIVE_STREAM / VIDEO 모드) | MediaPipeTasksVision(CocoaPods) | 상 | CocoaPods ↔ Kotlin/Native cinterop 또는 Swift 브리지 필요, 공식 KMP 래퍼 없음(K7, UNVERIFIED) |
+| `PoseEstimator` | 프레임 → 33 랜드마크 + visibility + 월드 랜드마크(3.2 P9) | 프레임 + 타임스탬프 → `PoseFrame` 또는 "인물 없음" | MediaPipe Tasks Vision `PoseLandmarker`(LIVE_STREAM / VIDEO 모드) | MediaPipeTasksVision(CocoaPods) | 상 | CocoaPods ↔ Kotlin/Native cinterop 또는 Swift 브리지 필요, 공식 KMP 래퍼 없음(K7, UNVERIFIED) |
 | `CameraController` | 카메라 수명주기, 전/후면 선택, 프리뷰 뷰 제공, 하드웨어 레벨·해상도 보고 | 설정 → 프리뷰 뷰 + 카메라 정보 | CameraX `ProcessCameraProvider`, `PreviewView`를 `AndroidView`로 임베드 | `AVCaptureSession` + `AVCaptureVideoPreviewLayer`를 `UIKitView`로 임베드(K3 VERIFIED) | 중 | 세션 구성 코드를 Kotlin/Native에서 작성, `ExperimentalForeignApi` |
 | `VideoRecorder` | 엄격 세션 녹화(720p/30fps/목표 0.85 Mbps, 7장), 종료 후 파일 경로·SHA-256 계산 트리거 | 시작/정지 → 파일 URI | CameraX `VideoCapture` + `Recorder`(`setTargetVideoEncodingBitRate`, 7장) | `AVCaptureMovieFileOutput` 또는 `AVAssetWriter` | 상 | 분석 출력과 녹화 동시 구동(9장). iOS 16 미만 링크 시 동시 활성 불가, `AVAssetWriter`로 가면 Swift 부담 증가 |
 | `SpeechOutput` | 카운트 음성(사전 합성 클립 1–100, "노카운트"), 100 초과는 TTS | 숫자·이벤트 → 소리, `play()` 호출 타임스탬프 기록 | `SoundPool`(사전 로드) + `TextToSpeech`(prewarm), 필요 시 Oboe/AAudio(6장) | `AVAudioPlayer`(`prepareToPlay`) + `AVSpeechSynthesizer` | 하 | 표준 API. 오디오 세션 카테고리 설정만 주의 |

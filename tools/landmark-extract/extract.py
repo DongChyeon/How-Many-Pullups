@@ -50,7 +50,12 @@ def extract(video: Path, model: str):
                        for p in res.pose_landmarks[0]]
             else:
                 pts = None
-            frames.append({"t": t, "lm": pts})
+            if res.pose_world_landmarks:  # 미터, 엉덩이 중심 원점
+                wpts = [[r5(p.x), r5(p.y), r5(p.z), r5(p.visibility), r5(p.presence)]
+                        for p in res.pose_world_landmarks[0]]
+            else:
+                wpts = None
+            frames.append({"t": t, "lm": pts, "wlm": wpts})
             idx += 1
     cap.release()
     return {

@@ -204,10 +204,11 @@ class RepDetector(
         val top = evaluateTop()
 
         // EXT run (E11)
-        val extCond = if (practiceFront) ratio()?.let { it <= cfg.practiceRearmRatio } == true else theta?.let { it >= cfg.thetaExtDeg } == true
+        val thetaExt = c.thetaExtDeg
+        val extCond = if (practiceFront) ratio()?.let { it <= cfg.practiceRearmRatio } == true else theta?.let { it >= thetaExt } == true
         extRunStart = if (extCond) extRunStart ?: ts else null
         val ext = extRunStart?.let { ts - it >= cfg.tExtHoldMs } == true
-        val leave = if (practiceFront) ratio()?.let { it > cfg.practiceLeaveRatio } == true else theta?.let { it < cfg.thetaExtDeg - cfg.thetaHystDeg } == true
+        val leave = if (practiceFront) ratio()?.let { it > cfg.practiceLeaveRatio } == true else theta?.let { it < thetaExt - cfg.thetaHystDeg } == true
 
         // DWELL run (E8): timer from the first frame the TOP condition holds, regardless of state.
         if (top.cond == true) {
@@ -701,6 +702,7 @@ class RepDetector(
                 endMs = lastTs ?: it.calibratedAtMs,
                 fpsP50 = median(dts.filter { d -> d > 0 }.map { d -> 1000.0 / d }) ?: 0.0,
                 betaDeg = it.betaBarDeg,
+                thetaExtDeg = it.thetaExtDeg,
                 captureMode = captureMode,
                 countMode = countMode,
                 source = source,

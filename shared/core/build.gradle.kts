@@ -24,7 +24,7 @@ kotlin {
 }
 
 // Replay landmark dumps through the D2 detector and print count vs ground truth.
-// ./gradlew :shared:core:evalLandmarks -Pdir=docs/private/dataset/landmarks [-Pmeta=docs/private/dataset/meta]
+// ./gradlew :shared:core:evalLandmarks -Pdir=docs/private/dataset/landmarks [-Pmeta=docs/private/dataset/meta] [-Ptrace=<file substring>]
 tasks.register<JavaExec>("evalLandmarks") {
     group = "verification"
     description = "Evaluate RepDetector on landmark JSON files (-Pdir=<landmarks dir>, optional -Pmeta=<meta dir>)."
@@ -36,4 +36,5 @@ tasks.register<JavaExec>("evalLandmarks") {
     val dir = providers.gradleProperty("dir").orElse("docs/private/dataset/landmarks")
     val meta = providers.gradleProperty("meta")
     argumentProviders += CommandLineArgumentProvider { listOfNotNull(dir.get(), meta.orNull) }
+    providers.gradleProperty("trace").orNull?.let { systemProperty("eval.trace", it) }
 }

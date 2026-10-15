@@ -68,9 +68,13 @@ data class Calibration(
     val s: Double,
     val s2d: Double,
     val psiDeg: Double,
+    /** True when ψ and the V-z cue came from world landmarks; false = normalized-z fallback (unreliable, warn only). */
+    val psiFromWorld: Boolean,
     val yBarPx: Double,
     val yBarNorm: Double,
     val thetaHangDeg: Double,
+    /** Effective extension threshold θ_ext = max(θ_hang − Δ_ext, θ_floor_abs) (§11 A1). */
+    val thetaExtDeg: Double,
     val hHang: Double?,
     val aHang: Double,
     val pxRefPx: Double,
